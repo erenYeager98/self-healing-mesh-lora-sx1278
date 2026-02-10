@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SATELLITE COMMAND</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { --bg: #0b0c10; --panel: #1f2833; --neon: #66fcf1; --text: #c5c6c7; --alert: #ff003c; }
+        body { background-color: var(--bg); color: var(--text); font-family: 'Courier New', monospace; margin: 0; padding: 20px; }
+
+        /* HEADER */
+        header { border-bottom: 2px solid var(--neon); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        h1 { margin: 0; color: var(--neon); letter-spacing: 3px; }
+        .live-indicator { color: var(--alert); animation: pulse 1.5s infinite; font-weight: bold; }
+
+        /* GRID LAYOUT */
+        .dashboard { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-top: 20px; }
+        .card { background: var(--panel); padding: 15px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
+
+        /* METRICS */
+        .metrics-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
+        .metric { background: #151b24; padding: 10px; text-align: center; border: 1px solid #333; }
+        .metric h3 { margin: 0; font-size: 0.8em; color: #888; }
+        .metric p { margin: 5px 0 0 0; font-size: 1.5em; color: white; font-weight: bold; }
+
+        /* TERMINAL */
+        #terminal { height: 400px; overflow-y: auto; background: black; border: 1px solid #333; padding: 10px; font-size: 0.9em; }
+        .log-entry { margin-bottom: 5px; border-bottom: 1px solid #222; }
+        .ts { color: #666; }
+        .data { color: var(--neon); }
+        .rssi-bad { color: var(--alert); } .rssi-good { color: #00ff00; }
+
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <h1>SATELLITE CONTROL</h1>
+        <small>NODE AGGREGATION SYSTEM // 433MHz</small>
+    </div>
+    <div class="live-indicator">● LIVE FEED</div>
+</header>
+
+<div class="dashboard">
+
+    <div class="main-panel">
+        <div class="metrics-row">
+            <div class="metric">
+                <h3>PACKETS</h3>
+                <p id="total-pkts">0</p>
+            </div>
+            <div class="metric">
+                <h3>SIGNAL (RSSI)</h3>
+                <p id="live-rssi">--</p>
+            </div>
+            <div class="metric">
+                <h3>STATUS</h3>
+                <p style="color:var(--neon)">ONLINE</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="color:var(--neon)">SIGNAL INTEGRITY (LIVE)</h3>
+            <canvas id="rssiChart" height="100"></canvas>
+        </div>
+
+        <br>
+
+        <div class="card">
+            <h3 style="color:var(--neon)">INCOMING DATA STREAM</h3>
+            <div id="terminal">
+                <div class="log-entry"> > System Ready... Listening on Gateway.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="side-panel">
+        <div class="card">
+            <h3>ACTIVE NODES</h3>
+            <ul id="node-list" style="list-style: none; padding: 0;">
+                <li style="color:#666;">Waiting for beacons...</li>
+            </ul>
+        </div>
+        <br>
+        <div class="card">
+            <h3>SYSTEM INFO</h3>
+            <small>FREQ: 433.0 MHz</small><br>
+            <small>SF: 7 | BW: 125</small><br>
+            <small>SYNC: 0xA5</small>
+        </div>
+    </div>
+</div>
+
+<script>
+    const socket = io();
+
+    // --- CHART SETUP ---
+    const ctx = document.getElementById('rssiChart').getContext('2d');
+    const rssiChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Signal Strength (dBm)',
+                borderColor: '#66fcf1',
+                backgroundColor: 'rgba(102, 252, 241, 0.1)',
+                borderWidth: 2,
+                data: [],
+                tension: 0.4,
+                pointRadius: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                x: { display: false },
+                y: { grid: { color: '#333' }, min: -130, max: -20 }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+
+    // --- SOCKET EVENT LISTENER ---
+    socket.on('packet_data', function(data) {
+        // 1. Update Metrics
+        document.getElementById('total-pkts').innerText = data.count;
+        document.getElementById('live-rssi').innerText = data.rssi + " dBm";
+
+        // 2. Update Terminal
+        const term = document.getElementById('terminal');
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+
+        let rssiColor = data.rssi > -100 ? "rssi-good" : "rssi-bad";
+        entry.innerHTML = `<span class="ts">[${data.timestamp}]</span> <span class="data">${data.msg}</span> <span class="${rssiColor}">(${data.rssi} dBm)</span>`;
+
+        term.prepend(entry);
+
+        // 3. Update Chart
+        const now = new Date().toLocaleTimeString();
+        rssiChart.data.labels.push(now);
+        rssiChart.data.datasets[0].data.push(data.rssi);
+
+        // Keep chart clean (last 20 points)
+        if(rssiChart.data.labels.length > 20) {
+            rssiChart.data.labels.shift();
+            rssiChart.data.datasets[0].data.shift();
+        }
+        rssiChart.update();
+    });
+</script>
+
+</body>
+</html>
